@@ -1,11 +1,16 @@
 import gradio as gr
 import os
+import shutil
 import data_saver as ds
-import baseline
+import baseline 
 import joblib
 import subprocess
 import uuid
 import time
+import imageio_ffmpeg
+
+# Расширения, в которых может лежать аудио в датасете (animation -> .wav, movie -> .mp3)
+AUDIO_EXTENSIONS = ('.wav', '.mp3')
 
 
 class VideoSearchApp:
@@ -19,7 +24,11 @@ class VideoSearchApp:
         
         self.temp_dir = os.path.abspath(os.path.join(os.getcwd(), 'temp_muxed_videos'))
         os.makedirs(self.temp_dir, exist_ok=True)
-        
+
+        # Системный ffmpeg, если есть; иначе бинарник из пакета imageio-ffmpeg
+        self.ffmpeg_exe = shutil.which('ffmpeg') or imageio_ffmpeg.get_ffmpeg_exe()
+        print(f"Используется ffmpeg: {self.ffmpeg_exe}")
+
         print(f"Загрузка модели из: {model_path}")
         self.model = joblib.load(model_path)
         self.support_model = baseline.SupportModel(svc_model=self.model)
@@ -51,17 +60,31 @@ class VideoSearchApp:
         if deleted_count > 0:
             print(f"[Cleanup] Удалено {deleted_count} устаревших временных файлов.")
 
-    def mux_video_audio(self, video_path: str, audio_path: str) -> str:
-        """Объединяет видео и аудио в один mp4 файл с помощью FFmpeg."""
-        if not os.path.exists(video_path) or not os.path.exists(audio_path):
-            print(f"Warning: File not found. Video: {video_path}, Audio: {audio_path}")
-            return video_path 
-        
+    def find_audio_path(self, annotation_path: str) -> str | None:
+        """Подбирает существующий аудиофайл для аннотации, перебирая возможные расширения.
+        Возвращает None, если аудио нет (например, у стикеров)."""
+        base = annotation_path.replace('/annotation/', '/audio/', 1).rsplit('.', 1)[0]
+        for ext in AUDIO_EXTENSIONS:
+            candidate = base + ext
+            if os.path.exists(candidate):
+                return candidate
+        return None
+
+    def mux_video_audio(self, video_path: str, audio_path: str | None) -> str:
+        """Объединяет видео и аудио в один mp4 файл с помощью FFmpeg.
+        Если аудио нет или склейка не удалась — возвращает исходное видео без звука."""
+        if not os.path.exists(video_path):
+            print(f"Warning: видео не найдено: {video_path}")
+            return video_path
+        if audio_path is None:
+            # У клипа нет аудиодорожки (стикеры) — показываем видео как есть.
+            return video_path
+
         output_filename = f"{uuid.uuid4().hex}.mp4"
         output_path = os.path.join(self.temp_dir, output_filename)
-        
+
         cmd = [
-            'ffmpeg', '-y',
+            self.ffmpeg_exe, '-y',
             '-i', video_path,
             '-i', audio_path,
             '-c:v', 'copy',      # Копируем видео без перекодирования
@@ -69,11 +92,11 @@ class VideoSearchApp:
             '-shortest',         # Обрезаем по самому короткому потоку
             output_path
         ]
-        
+
         try:
             subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
             return output_path
-        except subprocess.CalledProcessError as e:
+        except (subprocess.CalledProcessError, FileNotFoundError, OSError) as e:
             print(f"FFmpeg error for {video_path}: {e}")
             return video_path
 
@@ -90,11 +113,8 @@ class VideoSearchApp:
             p.replace('/annotation/', '/video/', 1).rsplit('.', 1)[0] + '.mp4'
             for p in found_annotation_paths
         ]
-        audio_paths = [
-            p.replace('/annotation/', '/audio/', 1).rsplit('.', 1)[0] + '.wav'
-            for p in found_annotation_paths
-        ]
-        
+        audio_paths = [self.find_audio_path(p) for p in found_annotation_paths]
+
         muxed_video_paths = [
             self.mux_video_audio(v_path, a_path) 
             for v_path, a_path in zip(video_paths, audio_paths)
