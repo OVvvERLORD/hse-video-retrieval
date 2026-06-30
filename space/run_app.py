@@ -8,14 +8,18 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 # Переходим в корень, чтобы DataStorage нашёл metadata.parquet и vectors.usearch
-# (они грузятся относительно рабочей папки). Благодаря этому приложение можно
-# запускать как кнопкой ▶️ в VSCode, так и из любой папки.
 os.chdir(_ROOT)
 
 from gradio_app import VideoSearchApp
 
 TARGET_ROOT_DIR = os.path.join(_ROOT, 'EmoVid_Data')
-MODEL_PATH = os.path.join(_ROOT, 'stash', 'model_surely_not_overfitted.joblib')
+EMBEDDER_PATH = os.path.join(_ROOT, 'stash', 'emotion-embedder')
+CLASSIFIER_PATH = os.path.join(_ROOT, 'stash', 'emotion_classifier_head_best.pt')
 
-app = VideoSearchApp(root_dir=TARGET_ROOT_DIR, model_path=MODEL_PATH)
+app = VideoSearchApp(
+    root_dir=TARGET_ROOT_DIR,
+    backend="bert",
+    embedder_path=EMBEDDER_PATH,
+    classifier_path=CLASSIFIER_PATH,
+)
 app.launch(share=True)

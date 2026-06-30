@@ -2,8 +2,7 @@ import gradio as gr
 import os
 import shutil
 import data_saver as ds
-import baseline 
-import joblib
+import baseline
 import subprocess
 import uuid
 import time
@@ -12,16 +11,38 @@ import imageio_ffmpeg
 # Расширения, в которых может лежать аудио в датасете (animation -> .wav, movie -> .mp3)
 AUDIO_EXTENSIONS = ('.wav', '.mp3')
 
+# Артефакты по умолчанию для нового бэкенда (SBERT-эмбеддер + torch-голова).
+DEFAULT_EMBEDDER_PATH = 'stash/emotion-embedder'
+DEFAULT_CLASSIFIER_PATH = 'stash/emotion_classifier_head_best.pt'
+# Артефакт прежнего бэкенда (W2V + SVC) — используется при backend="w2v".
+DEFAULT_SVC_PATH = 'stash/model_surely_not_overfitted.joblib'
+
 
 class VideoSearchApp:
-    def __init__(self, root_dir: str = "./EmoVid_Data", model_path: str = 'model_surely_not_overfitted.joblib'):
+    def __init__(
+            self,
+            root_dir: str = "./EmoVid_Data",
+            backend: str = "bert",
+            embedder_path: str = DEFAULT_EMBEDDER_PATH,
+            classifier_path: str = DEFAULT_CLASSIFIER_PATH,
+            svc_model_path: str = DEFAULT_SVC_PATH,
+            index_path: str = "vectors.usearch",
+            meta_path: str = "metadata.parquet",
+    ):
         """
         Инициализация приложения поиска видео.
         :param root_dir: Корневая директория датасета (например, './EmoVid_Data')
-        :param model_path: Путь к файлу модели joblib
+        :param backend: "bert" — SBERT-эмбеддер + обученная torch-голова
+                        (emotion_classifier_head_best.pt); "w2v" — прежняя связка
+                        Word2Vec + SVC (svc_model_path).
+        :param embedder_path: Путь к папке SBERT-эмбеддера (для backend="bert")
+        :param classifier_path: Путь к .pt с весами головы-классификатора (для backend="bert")
+        :param svc_model_path: Путь к joblib SVC-модели (для backend="w2v")
+        :param index_path: Путь к векторному индексу usearch
+        :param meta_path: Путь к таблице метаданных parquet
         """
         self.root_dir = os.path.abspath(os.path.expanduser(root_dir))
-        
+
         self.temp_dir = os.path.abspath(os.path.join(os.getcwd(), 'temp_muxed_videos'))
         os.makedirs(self.temp_dir, exist_ok=True)
 
@@ -29,11 +50,18 @@ class VideoSearchApp:
         self.ffmpeg_exe = shutil.which('ffmpeg') or imageio_ffmpeg.get_ffmpeg_exe()
         print(f"Используется ffmpeg: {self.ffmpeg_exe}")
 
-        print(f"Загрузка модели из: {model_path}")
-        self.model = joblib.load(model_path)
-        self.support_model = baseline.SupportModel(svc_model=self.model)
+        self.support_model = self._build_support_model(
+            backend, embedder_path, classifier_path, svc_model_path
+        )
+
         print("Создание объекта класса DataStorage")
-        self.storage = ds.DataStorage(root_dir=self.root_dir, support_model=self.support_model, embedder=self.support_model.emb)
+        self.storage = ds.DataStorage(
+            root_dir=self.root_dir,
+            meta_path=meta_path,
+            index_path=index_path,
+            support_model=self.support_model,
+            embedder=self.support_model.emb,
+        )
 
         if len(self.storage.index) == 0:
             print("Индекс пустой, создаём базу данных с нуля...")
@@ -41,6 +69,23 @@ class VideoSearchApp:
             self.storage.embed_pending()
 
         print(f"Инициализация завершена. Временные файлы будут в: {self.temp_dir}")
+
+    @staticmethod
+    def _build_support_model(backend, embedder_path, classifier_path, svc_model_path):
+        """Собирает связку эмбеддер+классификатор в зависимости от backend."""
+        backend = backend.lower()
+        if backend == "bert":
+            print(f"Бэкенд BERT: эмбеддер '{embedder_path}', голова '{classifier_path}'")
+            return baseline.SBERTSupportModel(
+                classifier_path=classifier_path,
+                embedder=embedder_path,
+            )
+        if backend == "w2v":
+            import joblib
+            print(f"Бэкенд W2V: загрузка SVC из '{svc_model_path}'")
+            svc = joblib.load(svc_model_path)
+            return baseline.SupportModel(svc_model=svc)
+        raise ValueError(f"Неизвестный backend='{backend}'. Ожидается 'bert' или 'w2v'.")
 
     def cleanup_old_temp_files(self, max_age_minutes: int = 5):
         """Удаляет файлы из временной папки, которые старше заданного времени."""

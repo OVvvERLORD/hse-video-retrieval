@@ -89,21 +89,34 @@ class DataStorage:
         valid_ids = self.df["usearch_uid"].dropna()
         self._next_id = int(valid_ids.max()) + 1 if len(valid_ids) > 0 else 0
 
-        if os.path.exists(self.index_path):
-            self.index = Index()              
-            self.index.load(self.index_path)
-            if self.index.ndim != self.dim:
-                raise ValueError(
-                    f"Индекс имеет dim={self.index.ndim}, но pipeline ожидает dim={self.dim}"
-                )
-        else:
-            self.index = Index(
+        def _new_index() -> Index:
+            return Index(
                 ndim=self.dim,
                 metric=metric,
                 connectivity=connectivity,
                 expansion_add=expansion_add,
                 expansion_search=expansion_search
             )
+
+        if os.path.exists(self.index_path):
+            self.index = Index()
+            self.index.load(self.index_path)
+            if self.index.ndim != self.dim:
+                # Размерность на диске не совпадает с текущим эмбеддером
+                # (например, переключились с W2V (300) на SBERT (768)).
+                # Пересоздаём индекс с нуля и помечаем все записи как pending,
+                # чтобы embed_pending() пересчитал векторы новым эмбеддером.
+                print(
+                    f"Индекс на диске имеет dim={self.index.ndim}, а эмбеддер выдаёт "
+                    f"dim={self.dim}. Пересоздаю векторный индекс с нуля..."
+                )
+                os.remove(self.index_path)
+                self.index = _new_index()
+                if "status" in self.df.columns and len(self.df) > 0:
+                    self.df["status"] = "pending"
+                    self._save_meta()
+        else:
+            self.index = _new_index()
 
         if support_model is None:
             self.support_model = SupportModel()
@@ -238,8 +251,10 @@ class DataStorage:
             batch_uids = uids[i:i+self.batch_size]
             batch_texts = texts[i:i+self.batch_size]
             
-            vectors = np.array([self.embedder(t) for t in batch_texts])
-            
+            # Эмбеддим батч одним вызовом: SBERT кодирует список эффективнее,
+            # чем по одной строке; W2V-эмбеддер тоже принимает список.
+            vectors = np.asarray(self.embedder(batch_texts), dtype=np.float32)
+
             self.index.add(batch_uids, vectors)
             self.df.loc[self.df["usearch_uid"].isin(batch_uids), "status"] = "ready"
 
@@ -260,7 +275,7 @@ class DataStorage:
 
         probs = self.support_model.predict_proba([prompt])[0]
         top_3_probs = np.argsort(probs)[-3:][::-1]
-        expected_classes = self.support_model.svc.classes_[top_3_probs]
+        expected_classes = self.support_model.classes_[top_3_probs]
 
         valid_uids = set(
             self.df[self.df['emotion'].isin(expected_classes)]['usearch_uid']

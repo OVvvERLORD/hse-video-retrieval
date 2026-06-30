@@ -8,9 +8,10 @@
 huggingface_hub.hf_hub_download (с кешем).
 
 В Space-репозитории физически лежат только лёгкие артефакты:
-  - model_surely_not_overfitted.joblib  (SVC-классификатор эмоций)
+  - emotion-embedder/                   (SBERT-эмбеддер, fine-tuned all-mpnet-base-v2)
+  - emotion_classifier_head_best.pt     (torch-голова классификатора эмоций)
   - metadata.parquet                    (таблица метаданных)
-  - vectors.usearch                     (готовый векторный индекс)
+  - vectors.usearch                     (готовый векторный индекс, 768-dim)
 
 Для доступа к приватному датасету в настройках Space нужно добавить
 секрет HF_TOKEN (read-токен). См. README этого Space.
@@ -41,7 +42,9 @@ HF_TOKEN = os.environ.get("HF_TOKEN")
 # Всё, что после него, является путём ОТНОСИТЕЛЬНО корня датасета.
 LOCAL_DATA_PREFIX = "EmoVid_Data/"
 
-MODEL_PATH = "model_surely_not_overfitted.joblib"
+# Артефакты нового бэкенда (лежат в корне Space-репозитория).
+EMBEDDER_PATH = "emotion-embedder"
+CLASSIFIER_PATH = "emotion_classifier_head_best.pt"
 
 
 def _to_repo_relpath(local_path: str) -> str:
@@ -118,7 +121,12 @@ class SpaceVideoSearchApp(gradio_app.VideoSearchApp):
 
 
 if __name__ == "__main__":
-    app = SpaceVideoSearchApp(root_dir="./EmoVid_Data", model_path=MODEL_PATH)
+    app = SpaceVideoSearchApp(
+        root_dir="./EmoVid_Data",
+        backend="bert",
+        embedder_path=EMBEDDER_PATH,
+        classifier_path=CLASSIFIER_PATH,
+    )
     # Видео для стикеров (без аудио) отдаются прямо из кеша huggingface_hub,
     # поэтому добавляем этот каталог в allowed_paths — иначе Gradio блокирует
     # отдачу файлов вне рабочей папки/temp (InvalidPathError).
