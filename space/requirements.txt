@@ -1,0 +1,12 @@
+gradio==6.16.0
+scikit-learn==1.8.0
+gensim==4.4.0
+numpy==2.4.6
+pandas==3.0.3
+pyarrow==24.0.0
+usearch==2.25.3
+joblib==1.5.3
+tqdm==4.67.3
+imageio-ffmpeg==0.6.0
+huggingface-hub==1.18.0
+scipy==1.17.1
