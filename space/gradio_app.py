@@ -19,7 +19,7 @@ class VideoSearchApp:
         Инициализация приложения поиска видео.
         :param root_dir: Корневая директория датасета (например, './EmoVid_Data')
         :param model_path: Путь к файлу модели joblib
-        """
+        """           
         self.root_dir = os.path.abspath(os.path.expanduser(root_dir))
         
         self.temp_dir = os.path.abspath(os.path.join(os.getcwd(), 'temp_muxed_videos'))
